@@ -1,0 +1,50 @@
+[package]
+name = "qwen-code"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Qwen Code - an AI coding agent CLI driven by a Thinking model and a Coder model"
+license = "MIT"
+readme = "README.md"
+
+[lib]
+name = "qwen_code"
+path = "src/lib.rs"
+
+[[bin]]
+name = "qwen"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+regex = "1"
+globset = "0.4"
+ignore = "0.4"
+sha2 = "0.10"
+thiserror = "2"
+ctrlc = "3"
+unicode-width = "0.2"
+half = "2"
+clap = { version = "4", features = ["derive", "wrap_help"] }
+ureq = { version = "2.12", features = ["json", "proxy-from-env"] }
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "half", "cuda", "directml"] }
+tokenizers = { version = "0.22", default-features = false, features = ["unstable_wasm"] }
+ratatui = "0.30"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_System_Console"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+codegen-units = 4

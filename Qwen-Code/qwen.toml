@@ -1,0 +1,114 @@
+# Qwen Code configuration. TOML is the only supported configuration format.
+#
+# Search order: --config <file>, ./qwen.toml, <user config dir>/qwen.toml, built-in defaults.
+# Relative model paths are resolved relative to this file.
+
+[qwen]
+name = "Qwen Code"
+# Upper bound of Thinking <-> Coder rounds for one task (prevents endless loops).
+max_iterations = 30
+
+# --- Models -----------------------------------------------------------------
+# Each role is a table. (A plain string such as `thinking = "qwen3-..."` is also accepted,
+# but TOML does not allow a string and a table for the same key in one file.)
+
+[models.thinking]
+provider = "qwen"
+name = "qwen3-235b-a22b-thinking-2507"
+runtime = "onnx"                  # "onnx" (local ONNX Runtime) or "api" (Qwen API / DashScope)
+path = "./models/thinking"        # directory with model.onnx + tokenizer.json (or a .onnx file)
+# device = "cpu"                  # cpu | cuda | directml (overrides [runtime.onnx].device)
+# temperature = 0.6
+# max_new_tokens = 8192
+# context_window = 32768
+
+[models.coder]
+provider = "qwen"
+name = "qwen3-coder-next"
+runtime = "onnx"
+path = "./models/coder"
+# temperature = 0.2
+# max_new_tokens = 4096
+# context_window = 32768
+
+# Example: use the Qwen API (Alibaba Cloud Model Studio / DashScope) instead of local ONNX files.
+# The key is read from the environment variable named by api_key_env (default DASHSCOPE_API_KEY).
+# [models.coder]
+# provider = "qwen"
+# name = "qwen3-coder-next"        # any model name your Qwen API account offers
+# runtime = "api"
+# api_base = "https://dashscope-intl.aliyuncs.com/api/v1"   # default; use https://dashscope.aliyuncs.com/api/v1 for mainland China
+# api_key_env = "DASHSCOPE_API_KEY"
+
+# --- Providers ----------------------------------------------------------------
+[providers.qwen]
+enabled = true
+
+[providers.kimi]
+enabled = true
+
+[providers.glm]
+enabled = true
+
+# --- ONNX Runtime ---------------------------------------------------------------
+[runtime.onnx]
+# Shared library of ONNX Runtime. If empty: $ORT_DYLIB_PATH, then next to the qwen executable,
+# ./lib and ./models are searched.
+# dylib_path = "/opt/onnxruntime/lib/libonnxruntime.so"
+device = "cpu"                    # cpu | cuda | directml
+device_id = 0
+intra_threads = 0                 # 0 = ONNX Runtime default
+
+# --- Context ----------------------------------------------------------------------
+[context]
+max_tokens = 24000                # prompt budget (bounded by the model context window)
+compact_threshold = 0.85
+keep_recent = 6
+max_tool_output_bytes = 12000
+
+# --- Agent loop ---------------------------------------------------------------------
+[agent]
+max_coder_steps = 16              # tool steps the Coder may take per instruction
+max_thinking_steps = 10           # planning / read-only steps per Thinking turn
+max_repairs = 3                   # retries after invalid JSON from a model
+model_retries = 2                 # retries after connection failures
+retry_backoff_ms = 500
+
+# --- Permissions ----------------------------------------------------------------------
+# Policies: "allow" (run), "ask" (Allow [Y/N] prompt), "deny" (never run).
+[permissions]
+read = "allow"
+write = "allow"
+edit = "allow"
+delete = "ask"
+execute = "allow"
+network = "allow"
+git = "allow"
+process = "allow"
+filesystem = "ask"                # paths outside the workspace
+default = "ask"                   # anything without an explicit rule
+
+[permissions.commands]
+destructive = "ask"               # rm -r, git reset --hard, git push --force, sudo, ...
+system_destructive = "deny"       # format disk, shutdown, rm -rf /, credential destruction, ...
+unknown = "ask"                   # programs that are not known development tools
+allow = []                        # glob patterns matched against each command, e.g. "cargo *"
+ask = []
+deny = []
+
+# --- Tools ---------------------------------------------------------------------------------
+[tools]
+command_timeout_secs = 120
+test_timeout_secs = 600
+max_output_bytes = 20000
+max_search_results = 100
+max_read_lines = 2000
+shell = "auto"                    # auto | sh | bash | powershell | cmd
+
+# --- CLI -------------------------------------------------------------------------------------
+[cli]
+ui = "auto"                       # auto (TUI on a terminal) | tui | repl
+color = true
+show_thinking = false
+prompt = "> "
+history_size = 500
