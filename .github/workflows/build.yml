@@ -1,0 +1,112 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  build:
+    name: Build and test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux-x86_64
+            exe: qwen
+          - os: windows-latest
+            name: windows-x86_64
+            exe: qwen.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy --all-targets
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Test (unit + agent-loop integration, real cargo builds)
+        run: cargo test --release
+
+      - name: CLI smoke test
+        shell: bash
+        run: |
+          ./target/release/${{ matrix.exe }} --version
+          ./target/release/${{ matrix.exe }} --help > /dev/null
+          ./target/release/${{ matrix.exe }} --print-config > /dev/null
+
+      - name: Package (linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist/qwen-code
+          cp target/release/qwen qwen.toml README.md dist/qwen-code/
+          cp -r models tools dist/qwen-code/
+          tar -C dist -czf qwen-code-${{ matrix.name }}.tar.gz qwen-code
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/qwen-code | Out-Null
+          Copy-Item target/release/qwen.exe, qwen.toml, README.md dist/qwen-code/
+          Copy-Item -Recurse models, tools dist/qwen-code/
+          Compress-Archive -Path dist/qwen-code -DestinationPath qwen-code-${{ matrix.name }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwen-code-${{ matrix.name }}
+          path: |
+            qwen-code-*.tar.gz
+            qwen-code-*.zip
+
+  onnx-runtime:
+    name: Real ONNX Runtime test (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ONNX Runtime and tooling
+        run: pip install onnxruntime onnx tokenizers numpy
+      - name: Generate tiny model and run the test
+        run: |
+          python tools/make_tiny_model.py "$RUNNER_TEMP/tiny"
+          export ORT_DYLIB_PATH="$(python -c 'import onnxruntime,glob,os;d=os.path.join(os.path.dirname(onnxruntime.__file__),"capi");print(glob.glob(d+"/libonnxruntime.so*")[0])')"
+          export QWEN_TEST_ONNX_DIR="$RUNNER_TEMP/tiny"
+          cargo test --release --test onnx_real -- --nocapture
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, onnx-runtime]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: qwen-code-*
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            qwen-code-*.tar.gz
+            qwen-code-*.zip
