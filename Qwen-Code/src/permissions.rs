@@ -369,7 +369,17 @@ fn tokenize(cmd: &str, posix: bool) -> Result<(Vec<Tok>, Vec<String>), String> {
     while i < chars.len() {
         let c = chars[i];
         match c {
-            '\'' if posix => {
+            // PowerShell and POSIX shells quote with '...'; cmd.exe treats ' literally. On the
+            // Windows side a quote at the start of a word is a quote when it is closed, and a
+            // plain character otherwise (e.g. `echo it's`).
+            '\'' if posix || !in_word => {
+                let closed = chars[i + 1..].contains(&'\'');
+                if !closed && !posix {
+                    in_word = true;
+                    cur.push('\'');
+                    i += 1;
+                    continue;
+                }
                 in_word = true;
                 i += 1;
                 let start = i;
@@ -804,6 +814,11 @@ fn flag_args(args: &[String]) -> Vec<&String> {
     out
 }
 
+/// cmd.exe style switch such as `/s`, `/q`, `/f` (but not the root glob `/*` or a path like `/etc`).
+fn is_cmd_switch(a: &str) -> bool {
+    a.len() >= 2 && a.len() <= 3 && a.starts_with('/') && a[1..].chars().all(|c| c.is_ascii_alphabetic())
+}
+
 fn positional_args(args: &[String]) -> Vec<&String> {
     let mut out = Vec::new();
     let mut after_dd = false;
@@ -1221,7 +1236,8 @@ fn classify_segment(seg: &Segment, ctx: &Ctx, out: &mut CommandAnalysis, depth: 
         let targets: Vec<&String> = positional_args(&args)
             .into_iter()
             .filter(|a| !(lprog == "remove-item" && a.starts_with('-')))
-            .filter(|a| !(a.starts_with('/') && a.len() == 2 && !ctx.posix))
+            // cmd switches such as /s /q (but not the root glob "/*")
+            .filter(|a| !(!ctx.posix && is_cmd_switch(a)))
             .collect();
         if targets.is_empty() && !args.is_empty() {
             // e.g. PowerShell "Remove-Item -Path x -Recurse"
@@ -1259,7 +1275,7 @@ fn classify_segment(seg: &Segment, ctx: &Ctx, out: &mut CommandAnalysis, depth: 
         out.add_cat(Category::Write);
         let targets = positional_args(&args);
         for t in &targets {
-            if t.starts_with('/') && !ctx.posix && t.len() <= 3 {
+            if !ctx.posix && is_cmd_switch(t) {
                 continue;
             }
             let tg = resolve_target(t, ctx);
@@ -1672,5 +1688,22 @@ mod tests {
         assert!(t.contains(&Tok::Op("2>&1".into())));
         assert!(t.contains(&Tok::Op("&&".into())));
         assert!(tokenize("echo 'oops", true).is_err());
+    }
+
+    /// The Windows-mode parser (cmd/PowerShell semantics) is exercised on every platform.
+    fn win_risk(cmd: &str) -> Risk {
+        let ws = std::path::Path::new("/work/project");
+        let ctx = Ctx { workspace: ws, cwd: ws, posix: false };
+        analyze_with(cmd, &ctx, 0).risk.unwrap_or(Risk::Normal)
+    }
+
+    #[test]
+    fn windows_mode_handles_root_globs_and_single_quotes() {
+        assert_eq!(win_risk("rm -rf /*"), Risk::SystemDestructive);
+        assert_eq!(win_risk("rm -rf /"), Risk::SystemDestructive);
+        assert!(win_risk("rmdir /s /q build") < Risk::SystemDestructive);
+        assert_eq!(win_risk("sh -c 'exit 3'"), Risk::Normal);
+        assert_eq!(win_risk("echo it's fine"), Risk::Normal);
+        assert!(tokenize("sh -c 'exit 3'", false).is_ok());
     }
 }
